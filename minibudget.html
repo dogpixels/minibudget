@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html><head>
+		<title>minibudget</title>
+		<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta name="author" content="draconigen@gmail.com">
+		<style>
+			:root {
+				--foreground: #fff;
+				--background: #313133;
+				--assessment: #3a3a3a;
+				--pos: #03b320;
+				--neg: #d13636;
+				--warn: #ff7b00;
+			}
+
+			* {box-sizing: border-box; color: var(--foreground)}
+			html {min-height: 101%; background-color: var(--background); font-family: monospace}
+			main {margin: 0 auto;}
+			@media(min-width: 840px) {main {max-width: 840px}}
+
+			label[for="import-input"], button {display: inline-block; font-family: monospace; padding: 0 8px; background: rgba(255, 255, 255, 0.1); border: none}
+			label[for="import-input"]:hover, button:hover {cursor: pointer; background-color: rgba(255, 255, 255, 0.2)}
+			input {font-family: monospace; background: transparent; color: var(--foreground); border: 1px solid rgba(255, 255, 255, 0.1); padding: 2px 6px}
+			
+			input[type="checkbox"] {margin: 0}
+			input[type="checkbox"] ~ span {position: relative; top: -2px}
+			input[type="text"], h3 {padding: 2px 8px}
+			input[type="text"][disabled] {border: none}
+
+			.hidden {display: none; opacity: 0; position: fixed; left: -9999em}
+
+			.pos {color: var(--pos)}
+			.neg {color: var(--neg)}
+			.warn {color: var(--warn)}
+			
+			#monthly > div, .summary, #assessment {display: flex; flex-wrap: wrap}
+			#monthly > div > div {flex-grow: 1}
+			#monthly-in > article > input {color: var(--pos)}
+			#monthly-out > article > input {color: var(--neg)}
+			article > input:nth-of-type(1), .summary > h3, #assessment > h3 {width: calc(100% - 110px);}
+			article > input:nth-of-type(2), .summary > input[disabled], #assessment > input[disabled] {width: 100px;text-align: right}
+
+			#monthly-in-summary {color: var(--pos)}
+			#monthly-out-summary {color: var(--neg)}
+
+			.summary {border-top: 2px solid var(--foreground)}
+			.summary > *, #assessment > * {font-weight: 800}
+
+			#assessment {margin: 12px 0; padding: 8px 0; background-color: var(--assessment)}
+
+			#fileoptions {text-align: right; padding-bottom: 2px; border-bottom: 1px solid rgba(255, 255, 255, 0.1)}
+		</style>
+
+		<script>
+			class MemoryController {
+				static getDataStructure() {
+					return {
+						config: {
+							product: 'minibudget',
+							version: '1.0.0',
+							includeNonMonthlyInAssessment: false
+						},
+						articles: {
+							monthly: {in: [], out: []},
+							quarterly: [],
+							biannual: [],
+							annual: []
+						}
+					}
+				}
+
+				static load() {
+					return JSON.parse(localStorage.getItem('data'));
+				}
+
+				static save(data) {
+					try {
+						localStorage.setItem('data', JSON.stringify(data));
+					}
+					catch(e) {
+						console.error(e);
+						alert(e);
+						return false;						
+					}
+					return true;
+				}
+
+				static evictData() {
+					localStorage.removeItem('data');
+				}
+
+				static async import(changeEvent) {
+					let file = changeEvent.target.files[0];
+					let result = {};
+
+					if (!/json/.test(file.type)) {
+						alert('Invalid file type.');
+						return MemoryController.getDataStructure();
+					}					
+
+					let reader = new FileReader();
+
+					reader.onload = (function(f) {
+						return function(event) {
+							Select.importCache.value = event.target.result;
+						}
+					})(file);
+					
+					await reader.readAsText(file);
+					
+					try {
+						result = JSON.parse(Select.importCache.value);
+					}
+					catch(e) {
+						console.warn(e);
+						// import fails sometimes; race condition?
+						// recorded exceptions:
+							// SyntaxError: "JSON.parse: unexpected end of data at line 1 column 1 of the JSON data"
+						result = MemoryController.getDataStructure();
+					}
+
+					return result;
+				}
+
+				static export(data) {
+					let a = Select.exportCache;
+					a.setAttribute('href', 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(data)));
+					a.setAttribute('download', 'budget.json');
+					a.click();
+				}
+			}
+	
+			/**
+			 * Shortcut to selecting various elements within the document.
+			 */ 
+			class Select {
+				static get articles()				{return document.querySelectorAll('article')}
+
+				static get monthlyInSection()		{return document.getElementById('monthly-in')}
+				static get monthlyOutSection()		{return document.getElementById('monthly-out')}
+				static get quarterlySection()		{return document.getElementById('quarterly-articles')}
+				static get biannualSection()		{return document.getElementById('biannual-articles')}
+				static get annualSection()			{return document.getElementById('annual-articles')}
+
+				static get monthlyInArticles()		{return document.querySelectorAll('#monthly-in > article')}
+				static get monthlyOutArticles()		{return document.querySelectorAll('#monthly-out > article')}
+				static get quarterlyArticles()		{return document.querySelectorAll('#quarterly-articles > article')}
+				static get biannualArticles()		{return document.querySelectorAll('#biannual-articles > article')}
+				static get annualArticles()			{return document.querySelectorAll('#annual-articles > article')}
+
+				static get inputSections()			{return document.querySelectorAll('#monthly-in, #monthly-out, #quarterly-articles, #biannual-articles, #annual-articles')}
+				static get monthlyInNumberInputs()	{return document.querySelectorAll('#monthly-in > article > input:nth-of-type(2)')}
+				static get monthlyOutNumberInputs()	{return document.querySelectorAll('#monthly-out > article > input:nth-of-type(2)')}
+				static get quarterlyNumberInputs()	{return document.querySelectorAll('#quarterly-articles > article > input:nth-of-type(2)')}
+				static get biannualNumberInputs()	{return document.querySelectorAll('#biannual-articles > article > input:nth-of-type(2)')}
+				static get annualNumberInputs()		{return document.querySelectorAll('#annual-articles > article > input:nth-of-type(2)')}
+
+				static get monthlyInSumInput()		{return document.getElementById('monthly-in-summary')}
+				static get monthlyOutSumInput()		{return document.getElementById('monthly-out-summary')}
+				static get quarterlySumInput()		{return document.getElementById('quarterly-summary')}
+				static get biannualSumInput()		{return document.getElementById('biannual-summary')}
+				static get annualSumInput()			{return document.getElementById('annual-summary')}
+				static get assessmentSumInput()		{return document.getElementById('assessment-summary')}
+
+				static get includeNonMonthlyInAssessmentCheckbox() {return document.getElementById('assessment-includeNonMonthly')}
+
+				static get eraseButton()			{return document.getElementById('erase-button')}
+				static get importButton()			{return document.querySelectorAll('label[for="import-input"]')[0]}
+				static get exportButton()			{return document.getElementById('export-button')}
+				static get importInput()			{return document.getElementById('import-input')}
+				static get importCache()			{return document.getElementById('import-cache')}
+				static get exportCache()			{return document.getElementById('export-cache')}
+			}
+
+			class CalculationController {
+				/**
+				 * Attempts to parse multiple kinds of sources to a processable number.
+				 * May accept numbers as well as <article> or <input>.
+				 * Null and empty strings will be parsed to 0.
+				 * @param {number|string|element} source The number/string or element (<article> or <input>) that contains a number to be parsed.
+				 * @returns {number} A parsed number or NaN on failure.
+				 */
+				static parseValue(source) {
+					if (source === '' || source === null)
+						return 0;
+
+					if (typeof source === 'string')
+						return parseFloat(source.replace(',', '.').replace(' ', '').replace('+', ''));
+
+					if (!isNaN(source))
+						return parseFloat(source);
+					
+					switch(source.tagName.toLowerCase()) {
+						case 'article': return parseFloat((source.querySelectorAll('input[type="text"]')[1].value).replace(',', '.').replace(' ', '').replace('+', ''));
+						case 'input': return parseFloat(source.value.replace(',', '.').replace(' ', '').replace('+', ''));
+						default: console.error('unhandled value source in CalculationController.parseValue()');
+					}
+
+					return NaN;
+				}
+
+				/**
+				 * Summarizes all articles category-wise and returns an object of results for further processing, e.g. by DisplayController.displayFullResults().
+				 * @param {object} articles The data part that contains all articles as defined by MemoryController.getDataStructure().articles.
+				 * @returns {object} An object containing all sums per category.
+				 */
+				static exec(articles) {
+					var result = {
+						monthlyInSum: 0,
+						monthlyOutSum: 0,
+						quarterlySum: 0,
+						biannualSum: 0,
+						annualSum: 0,
+						assessmentSum: 0
+					}
+
+					articles.monthly.in.forEach(article => {result.monthlyInSum += CalculationController.parseValue(article[1])});
+					articles.monthly.out.forEach(article => {result.monthlyOutSum += CalculationController.parseValue(article[1])});
+					articles.quarterly.forEach(article => {result.quarterlySum += CalculationController.parseValue(article[1])});
+					articles.biannual.forEach(article => {result.biannualSum += CalculationController.parseValue(article[1])});
+					articles.annual.forEach(article => {result.annualSum += CalculationController.parseValue(article[1])});
+
+					return result;
+				}
+			}
+
+			class DisplayController {
+				/**
+				 * Reads all input fields and returns their values as an articles object compatible to data.articles.
+				 * @returns {object} An object containing all inputs structured as MemoryController.getDataStructure().articles.
+				 */
+				static readInput() {
+					// generate new data structure
+					var articles = MemoryController.getDataStructure().articles;
+
+					Select.monthlyInArticles.forEach(article => {
+						let contents = article.querySelectorAll('input');
+						if (contents[0].value + contents[1].value !== '')
+							articles.monthly.in.push([contents[0].value, contents[1].value]); 
+					});
+
+					Select.monthlyOutArticles.forEach(article => {
+						let contents = article.querySelectorAll('input');
+						if (contents[0].value + contents[1].value !== '')
+							articles.monthly.out.push([contents[0].value, contents[1].value])
+					})
+
+					Select.quarterlyArticles.forEach(article => {
+						let contents = article.querySelectorAll('input');
+						if (contents[0].value + contents[1].value !== '')
+							articles.quarterly.push([contents[0].value, contents[1].value]);
+					})
+
+					Select.biannualArticles.forEach(article => {
+						let contents = article.querySelectorAll('input');
+						if (contents[0].value + contents[1].value !== '')
+							articles.biannual.push([contents[0].value, contents[1].value]);
+					})
+
+					Select.annualArticles.forEach(article => {
+						let contents = article.querySelectorAll('input');
+						if (contents[0].value + contents[1].value !== '')
+							articles.annual.push([contents[0].value, contents[1].value]);
+					})
+
+					return articles;
+				}
+
+				/**
+				 * Empties and populates all input fields with data, e.g. upon initialization.
+				 * @param {object} data A data object, as returned by MemoryController.load().
+				 */
+				static displayAllData(data) {
+					DisplayController.empty(Select.monthlyInSection);
+					DisplayController.empty(Select.monthlyOutSection);
+					DisplayController.empty(Select.quarterlySection);
+					DisplayController.empty(Select.biannualSection);
+					DisplayController.empty(Select.annualSection);
+
+					data.articles.monthly.in.forEach(article => {
+						Select.monthlyInSection.appendChild(new Article(article[0], article[1]).html)
+					});
+
+					data.articles.monthly.out.forEach(article => {
+						Select.monthlyOutSection.appendChild(new Article(article[0], article[1]).html)
+					});
+
+					data.articles.quarterly.forEach(article => {
+						Select.quarterlySection.appendChild(new Article(article[0], article[1]).html)
+					});
+
+					data.articles.biannual.forEach(article => {
+						Select.biannualSection.appendChild(new Article(article[0], article[1]).html)
+					});
+
+					data.articles.annual.forEach(article => {
+						Select.annualSection.appendChild(new Article(article[0], article[1]).html)
+					});
+
+					Select.includeNonMonthlyInAssessmentCheckbox.checked = data.config.includeNonMonthlyInAssessment;
+				}
+
+				/**
+				 * Fills all output fields with the sum of their respective category.
+				 * @param {object} results A set of results as returned by CalculationController.exec().
+				 */
+				static displayFullResults(results) {
+					DisplayController.display(Select.monthlyInSumInput, results.monthlyInSum);
+					DisplayController.display(Select.monthlyOutSumInput, results.monthlyOutSum);
+					DisplayController.display(Select.quarterlySumInput, results.quarterlySum);
+					DisplayController.display(Select.biannualSumInput, results.biannualSum);
+					DisplayController.display(Select.annualSumInput, results.annualSum);
+
+					results.assessmentSum = results.monthlyInSum + results.monthlyOutSum;
+
+					if (Select.includeNonMonthlyInAssessmentCheckbox.checked) {
+						results.assessmentSum 
+						+= results.quarterlySum / 3
+						+ results.biannualSum / 6
+						+ results.annualSum / 12
+					}
+
+					DisplayController.display(Select.assessmentSumInput, results.assessmentSum);
+				}
+
+				/**
+				 * Displays a number in any input element, including according colorization.
+				 * @param {element} targetInputElement The (disabled/readonly) <input type="text"> to display the value in.
+				 * @param {number} value The currency value to be displayed.
+				 */
+				static display(targetInputElement, value) {
+					targetInputElement.value = value.toFixed(2);
+
+					// color assessment line according to value
+					if (targetInputElement === Select.assessmentSumInput) {
+						if (value.toFixed(2) >= 0.0) {
+							targetInputElement.classList.remove('neg');
+							targetInputElement.classList.add('pos');
+						}
+						else {
+							targetInputElement.classList.remove('pos');
+							targetInputElement.classList.add('neg');
+						}
+					}
+				}
+
+				/**
+				 * Removes all articles from a given section.
+				 * @param {element} section A section to be stripped from all articles.
+				 */
+				static empty(section) {
+					[...section.children].forEach(child => {
+						if (child.tagName.toLowerCase() === 'article') {
+							section.removeChild(child);
+						}
+					});
+				}
+			}
+
+			class Article {
+				constructor(name = '…', value = 0) {
+					this._name = name;
+					this._value = CalculationController.parseValue(value);
+				}
+
+				get name() {
+					return this._name;
+				}
+
+				set name(input) {
+					this._name = input;
+				}
+
+				get value() {
+					return this._value.toFixed(2);
+				}
+
+				set value(input) {
+					let temp = parseFloat(CalculationController.parseValue(input));
+					if (temp)
+						this._value = temp;
+					else
+						console.error('unable to parse input to float in set value(input)'); // TODO: show error message?
+				}
+
+				get html() {
+					return this.getHtml();
+				}
+				
+				getValueString() {
+					return this.value.replace('\.', ',');
+				}
+
+				getHtml() {
+					let htmlName = document.createElement('input');
+					htmlName.type = 'text';
+
+					let htmlValue = document.createElement('input');
+					htmlValue.type = 'text';
+
+					if (this.name === '…') {
+						htmlName.placeholder = this.name;
+						htmlValue.placeholder = this.value;
+					}
+					else {
+						htmlName.value = this.name;
+						htmlValue.value = this.value;
+					}
+
+					let htmlArticle = document.createElement('article');
+					htmlArticle.appendChild(htmlName);
+					htmlArticle.appendChild(htmlValue);
+
+					return htmlArticle;
+				}
+			}
+		</script>
+	</head>
+	<body>
+		<main>
+			<section id="fileoptions">
+				<input type="file" id="import-input" class="hidden" name="import-input" />
+				<input type="textarea" id="import-cache" class="hidden" name="import-cache" />
+				<a href="#" id="export-cache" class="hidden"></a>
+				<button type="button" id="erase-button" class="warn">Alles löschen</button>
+				<label for="import-input">Import</label>
+				<button type="button" id="export-button">Export</button>
+			</section>
+			<section id="monthly">
+				<h1>Monatlich</h1>
+				<div>
+					<div>
+						<div id="monthly-out">
+							<h2>Ausgaben</h2>
+							<!-- <article><input type="text" value="example" /><input type="text" value="-3,33" /></article> -->
+						</div>
+						<div class="summary">
+							<h3>Summe:</h3><input id="monthly-out-summary" type="text" value="0,00" disabled="disabled">
+						</div>
+					</div>
+					<div>
+						<div id="monthly-in">
+							<h2>Einnahmen</h2>
+							<!-- <article><input type="text" value="example" /><input type="text" value="2,22" /></article> -->
+						</div>
+						<div class="summary">
+							<h3>Summe:</h3><input id="monthly-in-summary" type="text" value="0,00" disabled="disabled">
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section id="assessment">
+				<h3>
+					<span>Saldo:</span>
+					<br>
+					<label>
+						<input type="checkbox" id="assessment-includeNonMonthly">
+						<span>Nichtmonatliche Zahlungen einbeziehen</span>
+					</label>
+				</h3>
+				<input id="assessment-summary" class="pos" type="text" value="0,00" disabled="disabled">
+			</section>
+			
+			<section id="quarterly">
+				<h1>Quartalsweise</h1>
+				<div id="quarterly-articles">
+					<!-- <article><input type="text" value="example" /><input type="text" value="-333,33" /></article> -->
+				</div>
+				<div class="summary">
+					<h3>Summe: </h3><input id="quarterly-summary" type="text" value="0,00" disabled="disabled">
+				</div>
+			</section>
+
+			<section id="biannual">
+				<h1>Halbjährlich</h1>
+				<div id="biannual-articles">
+					<!-- <article><input type="text" value="example" /><input type="text" value="-333,33" /></article> -->
+				</div>
+				<div class="summary">
+					<h3>Summe: </h3><input id="biannual-summary" type="text" value="0,00" disabled="disabled">
+				</div>
+			</section>
+
+			<section id="annual">
+				<h1>Jährlich</h1>
+				<div id="annual-articles">
+					<!-- <article><input type="text" value="example" /><input type="text" value="-333,33" /></article> -->
+				</div>
+				<div class="summary">
+					<h3>Summe: </h3><input id="annual-summary" type="text" value="0,00" disabled="disabled">
+				</div>
+			</section>
+		</main>
+		
+		<script>
+			/*
+			 *	global data object containing all config and articles
+			 */
+			var data;
+
+			loadData();
+			initialize();
+
+			function loadData() {
+				data = MemoryController.load();
+				
+				if (!data) {
+					data = MemoryController.getDataStructure();
+				}
+			}
+
+			function initialize() {
+				DisplayController.displayAllData(data);
+
+				// add empty lines for new article addition
+				addEmptyLines();
+
+				// listen for changes on all inputs
+				document.querySelectorAll('article input:not([disabled])').forEach(input => {
+					input.addEventListener('keyup', refreshAll);
+				});
+
+				Select.includeNonMonthlyInAssessmentCheckbox.addEventListener('change', refreshAll);
+
+				Select.eraseButton.addEventListener('click', onEraseAllClick);
+				Select.importInput.addEventListener('change', onImportClick, false);
+				Select.exportButton.addEventListener('click', onExportClick);
+
+				// refresh once at end of initialization
+				refreshAll();
+			}
+
+			function refreshAll() {
+				data.articles = DisplayController.readInput();
+				addEmptyLines();
+				data.config.includeNonMonthlyInAssessment = Select.includeNonMonthlyInAssessmentCheckbox.checked;
+				DisplayController.displayFullResults(CalculationController.exec(data.articles));
+				MemoryController.save(data);
+			}
+
+			function addEmptyLines() {
+				Select.inputSections.forEach(section => {
+					let newLineRequired = true;
+
+					section.querySelectorAll('input').forEach(input => {
+						if (input.value === '')
+							newLineRequired = false;
+					});
+
+					if (newLineRequired) {
+						let article = new Article().html;
+						article.addEventListener('keyup', refreshAll)
+						section.appendChild(article);
+					}
+				})
+			}
+			
+			async function onImportClick(inputChangeEvent) {
+				data = await MemoryController.import(inputChangeEvent);
+				initialize();
+			}
+
+			function onExportClick() {
+				MemoryController.export(data);
+			}
+
+			function onEraseAllClick() {
+				if (confirm('Delete all data?')) {
+					MemoryController.evictData();
+					loadData();
+					initialize();
+				}
+			}
+		</script>
+	</body>
+</html>
